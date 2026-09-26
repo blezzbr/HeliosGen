@@ -1,34 +1,43 @@
-# Higgsfield MVP
+# Video providers
 
-## Current architecture
+## Architecture
 
-`lib/modelConfig.ts` defines the image and video model catalog and Kie payload fields. `lib/providers.ts` stores each model's manually selected backend in browser localStorage. API keys are saved in the local SQLite `settings` table through server routes. `/api/generate-video` creates a Kie job and returns a `taskId`; `lib/kieJobPoller.ts` stores the result and emits an event consumed by `/api/job-stream` and the Video Generator node. `lib/kieUpload.ts` moves local media to Kie's temporary store before submission.
+`lib/modelConfig.ts` remains the existing model catalog and Kie request mapping. `lib/videoProviderCatalog.ts` defines the supported provider variant, input mode, duration, resolution and cost estimator. Kie remains the default for every model. `lib/providers.ts` stores per-model defaults in browser localStorage; each Video Generator node can override the provider in its own workflow data, so one workflow can use both providers. Gallery uses the per-model default. `/api/generate-video` dispatches to the Higgsfield adapter for selected variants and otherwise keeps the existing Kie route. Both providers return a `taskId` consumed by `/api/job-status` and `/api/job-stream`.
 
-The Higgsfield path branches before the existing Kie route, leaving Kie's payload and polling intact. The same logical `seedance-2` model uses `bytedance/seedance-2` at Kie and `bytedance/seedance-2.0/text-to-video` at Higgsfield. Only text-to-video is mapped for Higgsfield.
+Higgsfield credentials stay in the local SQLite settings database or server environment. `lib/providers/higgsfield/upload.ts` converts local `/generated/` or `data:` media into provider-reachable signed uploads. The V2 SDK submits once with retries disabled, stores the provider `request_id` alongside the local task, and the server polls the official status URL. An open node or gallery resumes polling after a local server restart without submitting again. Completed media is mirrored to local storage when possible.
+
+## Supported variants
+
+| Model | Provider | Inputs | Provider model ID |
+| --- | --- | --- | --- |
+| Existing video catalog | Kie.ai | Existing per-model capabilities | Existing `lib/modelConfig.ts` mapping |
+| Seedance 2.0 | Higgsfield | Text | `bytedance/seedance-2.0/text-to-video` |
+| Seedance 2.0 | Higgsfield | Start frame, optional end frame | `bytedance/seedance-2.0/image-to-video` |
+| Seedance 2.0 | Higgsfield | Image, video and audio references | `bytedance/seedance-2.0/reference-to-video` |
+| Kling 3.0 Standard | Higgsfield | Text | `kling-video/v3.0/std/text-to-video` |
+| Kling 3.0 Standard | Higgsfield | Start frame, optional end frame | `kling-video/v3.0/std/image-to-video` |
+
+Frames and multimodal references are mutually exclusive for Seedance on Higgsfield. Higgsfield Kling elements are not mapped; the UI blocks them and the server rejects them. Image-to-video endpoints follow the input frame's aspect ratio; their schemas do not accept the ratio control. Kie retains its original mode and input mappings.
+
+## Cost estimate
+
+For Higgsfield Seedance 2.0 text and image/audio references, the UI calculates USD from the [published video-token formula](https://open.higgsfield.ai/models/bytedance/seedance-2.0/text-to-video/playground), selected duration, resolution and aspect ratio. It is an estimate before discounts; final billing can differ. If the provider does not publish enough information for the selected variant, the UI displays `Cost unavailable` instead of inventing a price. Frame input determines the output ratio, and video references add billable input duration; both show unavailable until media metadata is available. Kie and Higgsfield Kling currently show unavailable.
 
 ## Configure and run
 
-Use Settings → API Keys to save **Higgsfield API Key ID** and **Higgsfield API Key Secret**. Alternatively, set `HF_API_KEY_ID` and `HF_API_KEY_SECRET` server-side. The SDK receives the combined `KEY_ID:KEY_SECRET` credential. These values are never returned to the browser or committed. Like the existing Kie key, the Settings value is stored in the local SQLite database; it is not encrypted with the macOS Keychain.
+1. Install with `corepack pnpm install` and run `corepack pnpm dev`.
+2. In Settings → API Keys, save Higgsfield API Key ID and API Key Secret. Server environment `HF_API_KEY_ID` and `HF_API_KEY_SECRET` are also supported. Kie has its own existing key.
+3. In Gallery → Video, select Seedance 2.0 or Kling 3.0 and then Kie.ai or Higgsfield. In Workflow, each Video Generator node has its own provider choice. Switching takes effect immediately.
+4. Connect a prompt, start/end frames or references supported by the selected variant. The Generate button is disabled when the chosen provider lacks credentials.
 
-Run `corepack pnpm install` then `corepack pnpm dev`. In Video Generator, choose **Seedance 2.0** and choose **Kie.ai** or **Higgsfield** in the provider pill. A missing Higgsfield key shows **Not configured** and blocks the Generate button. The selection takes effect immediately and persists per model.
+The saved key follows HeliosGen's existing local SQLite storage and is never returned to the browser. Like the existing Kie key, SQLite storage is not encrypted with the macOS Keychain. Do not commit credentials.
 
-For Kie, configure the Kie key and use the existing Seedance inputs. For Higgsfield, use a prompt only; duration 4–15 seconds, a fixed aspect ratio, 480p/720p/1080p, and optional sound. The server validates these values before submission.
+Run `corepack pnpm test:higgsfield` for a local API simulator covering credentials, provider routing, signed upload, payloads, polling, errors and restart recovery. Run `corepack pnpm exec tsc --noEmit`, `corepack pnpm lint` and `corepack pnpm build` for project checks. Live paid generation requires the user's provider keys and credits and was not exercised in this PR.
 
-Run `corepack pnpm test:higgsfield` for a no-credit mock integration test. It covers saved key status, the request payload, queued/in-progress/completed polling, failed and rate-limited requests, and Kie route selection. Run `corepack pnpm exec tsc --noEmit`, `corepack pnpm lint`, and `corepack pnpm build` for project checks.
+## Next PR
 
-## Current limits
-
-- Higgsfield accepts prompt-only Seedance 2.0. Image, video and audio references need provider-specific upload and model mappings.
-- The TypeScript SDK v2 exposes automatic polling through `subscribe`, but no explicit TypeScript resume method. If the local server restarts during a Higgsfield job, the in-memory poll ends and the local job eventually times out. Preserve the upstream `request_id` and add a resumable status route in a later PR.
-- No live paid Higgsfield or Kie generation was run without user credentials. The integration test uses a local API simulator.
-- No webhook, automatic retry of generation submission, cost routing or fallback is included.
-
-## Next PR plan
-
-1. Add Higgsfield Seedance reference-to-video and image-to-video with signed reference uploads, input validation and provider-specific handle availability.
-2. Add documented mappings for Kling and Wan, one operation at a time, without changing the Kie catalog.
-3. Add Soul / Soul ID image flows and Cinema Studio as separate adapters.
-4. Expose estimated cost before submission using current provider pricing and selected duration/resolution; mark estimates clearly.
-5. Persist Higgsfield `request_id` and resume polling after server restart, then consider manual Kie → Higgsfield fallback with explicit user confirmation to avoid duplicate charges.
-
-Model schemas and prices should be reverified against the official Higgsfield model pages for each later operation.
+1. Add Wan and additional Kling variants after verifying each official input schema and price contract.
+2. Add Soul / Soul ID and Cinema Studio as separate image/video adapter variants.
+3. Capture video-reference duration so Seedance reference cost can include input tokens; show Kie costs from an authoritative pricing source or account estimate endpoint when available.
+4. Add manual fallback Kie → Higgsfield after checking the first job's terminal status and asking the user before a second billable submission.
+5. Add durable job reconciliation on app startup and cancellation UI for providers that expose an official cancel endpoint.

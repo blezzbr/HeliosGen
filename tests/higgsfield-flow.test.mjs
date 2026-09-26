@@ -10,12 +10,29 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const mockState = { submits: [], polls: new Map() };
 const mock = createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
-  if (req.method === "POST" && url.pathname === "/bytedance/seedance-2.0/text-to-video") {
+  if (req.method === "POST" && url.pathname === "/files/generate-upload-url") {
+    assert.equal(req.headers.authorization, "Key test-id:test-secret");
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ upload_url: `http://127.0.0.1:${mock.address().port}/signed-upload`, upload_headers: { "Content-Type": "image/png" }, public_url: "https://media.example.com/frame.png" }));
+    return;
+  }
+  if (req.method === "PUT" && url.pathname === "/signed-upload") {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    assert.ok(Buffer.concat(chunks).length > 0);
+    res.writeHead(200); res.end();
+    return;
+  }
+  if (req.method === "POST" && [
+    "/bytedance/seedance-2.0/text-to-video", "/bytedance/seedance-2.0/image-to-video",
+    "/bytedance/seedance-2.0/reference-to-video", "/kling-video/v3.0/std/text-to-video",
+    "/kling-video/v3.0/std/image-to-video",
+  ].includes(url.pathname)) {
     assert.equal(req.headers.authorization, "Key test-id:test-secret");
     let body = "";
     for await (const chunk of req) body += chunk;
     const input = JSON.parse(body);
-    mockState.submits.push(input);
+    mockState.submits.push({ ...input, _endpoint: url.pathname });
     if (input.prompt === "rate limit") {
       res.writeHead(429, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ detail: "Rate limit" }));
@@ -32,7 +49,7 @@ const mock = createServer(async (req, res) => {
     const count = (mockState.polls.get(status[1]) ?? 0) + 1;
     mockState.polls.set(status[1], count);
     const input = mockState.submits[Number(status[1].split("-")[1]) - 1];
-    const state = count === 1 ? "queued" : count === 2 ? "in_progress" : input.prompt === "fail" ? "failed" : "completed";
+    const state = count === 1 ? "queued" : count < (input.prompt === "resume" ? 5 : 3) ? "in_progress" : input.prompt === "fail" ? "failed" : "completed";
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ request_id: status[1], status: state, ...(state === "completed" ? { video: { url: `http://127.0.0.1:${mock.address().port}/video.mp4` } } : {}) }));
     return;
@@ -76,10 +93,11 @@ test("Higgsfield credentials, payload, polling, errors and Kie selection", async
   const dataDir = await mkdtemp(join(tmpdir(), "heliosgen-hf-test-"));
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
-  const child = spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "-p", String(port)], {
+  const launch = () => spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "-p", String(port)], {
     cwd: process.cwd(), env: { ...process.env, HELIOS_DATA_DIR: dataDir, HF_API_BASE_URL: `http://127.0.0.1:${mock.address().port}`, NEXT_TELEMETRY_DISABLED: "1" },
     stdio: "ignore",
   });
+  let child = launch();
   try {
     await waitFor(`${base}/api/settings/higgsfield-key`);
     const status = () => fetch(`${base}/api/settings/higgsfield-key`).then((r) => r.json());
@@ -102,8 +120,64 @@ test("Higgsfield credentials, payload, polling, errors and Kie selection", async
     const done = await waitForJob(base, taskId);
     assert.equal(done.status, "done");
     assert.match(done.videoUrl, /^(\/generated\/videos\/|http:\/\/127\.0\.0\.1:)/);
-    assert.deepEqual(mockState.submits[0], { prompt: "success", duration: 5, resolution: "720p", aspect_ratio: "16:9", generate_audio: true });
+    assert.deepEqual(mockState.submits[0], { prompt: "success", duration: 5, resolution: "720p", aspect_ratio: "16:9", generate_audio: true, _endpoint: "/bytedance/seedance-2.0/text-to-video" });
     assert.ok(mockState.polls.get("request-1") >= 3);
+
+    const frame = `data:image/png;base64,${Buffer.from("local frame").toString("base64")}`;
+    const framed = await fetch(`${base}/api/generate-video`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ videoModel: "seedance-2", provider: "higgsfield", prompt: "frames", duration: 5,
+        resolution: "720p", aspectRatio: "16:9", startFrameUrl: frame, endFrameUrl: frame }),
+    });
+    assert.equal(framed.status, 200);
+    assert.equal((await waitForJob(base, (await framed.json()).taskId)).status, "done");
+    assert.equal(mockState.submits[1]._endpoint, "/bytedance/seedance-2.0/image-to-video");
+    assert.equal(mockState.submits[1].image_url, "https://media.example.com/frame.png");
+    assert.equal(mockState.submits[1].end_image_url, "https://media.example.com/frame.png");
+    assert.equal(mockState.submits[1].aspect_ratio, undefined);
+
+    const kling = await fetch(`${base}/api/generate-video`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ videoModel: "kling-3.0", provider: "higgsfield", prompt: "kling", duration: 5,
+        aspectRatio: "9:16", sound: true, startFrameUrl: "https://example.com/first.png", endFrameUrl: "https://example.com/last.png" }),
+    });
+    assert.equal(kling.status, 200);
+    assert.equal((await waitForJob(base, (await kling.json()).taskId)).status, "done");
+    assert.equal(mockState.submits[2]._endpoint, "/kling-video/v3.0/std/image-to-video");
+    assert.equal(mockState.submits[2].last_image_url, "https://example.com/last.png");
+
+    const references = await fetch(`${base}/api/generate-video`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ videoModel: "seedance-2", provider: "higgsfield", prompt: "reference", duration: 5,
+        resolution: "720p", aspectRatio: "9:16", referenceImageUrls: ["https://example.com/reference.png"] }),
+    });
+    assert.equal(references.status, 200);
+    assert.equal((await waitForJob(base, (await references.json()).taskId)).status, "done");
+    assert.equal(mockState.submits[3]._endpoint, "/bytedance/seedance-2.0/reference-to-video");
+    assert.deepEqual(mockState.submits[3].image_urls, ["https://example.com/reference.png"]);
+
+    const incompatible = await fetch(`${base}/api/generate-video`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ videoModel: "kling-3.0", provider: "higgsfield", prompt: "invalid", duration: 5,
+        referenceImageUrls: ["https://example.com/reference.png"] }),
+    });
+    assert.equal(incompatible.status, 400);
+
+    const resumable = await generate("resume");
+    assert.equal(resumable.status, 200);
+    const resumeTaskId = (await resumable.json()).taskId;
+    let requestSaved = false;
+    for (let attempt = 0; attempt < 30; attempt++) {
+      const current = await fetch(`${base}/api/job-status?taskId=${resumeTaskId}`).then(r => r.json());
+      if (current.requestId) { requestSaved = true; break; }
+      await pause(100);
+    }
+    assert.ok(requestSaved, "Higgsfield request ID should be persisted before polling");
+    child.kill("SIGTERM");
+    await new Promise(resolve => child.once("exit", resolve));
+    child = launch();
+    await waitFor(`${base}/api/settings/higgsfield-key`);
+    assert.equal((await waitForJob(base, resumeTaskId)).status, "done");
 
     const failed = await generate("fail");
     assert.equal((await waitForJob(base, (await failed.json()).taskId)).status, "error");
