@@ -40,7 +40,7 @@ function createSchema(d: DatabaseSync): void {
       azure_resolution TEXT, duration INTEGER, kling_mode TEXT, sound INTEGER,
       reference_image_urls TEXT,
       image_url TEXT, image_urls TEXT,
-      video_url TEXT, error_msg TEXT,
+      video_url TEXT, error_msg TEXT, provider_request_id TEXT,
       created_at TEXT, updated_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_gen_gallery
@@ -73,6 +73,10 @@ function createSchema(d: DatabaseSync): void {
       id TEXT PRIMARY KEY, name TEXT, data TEXT, updated_at INTEGER
     );
   `);
+  const columns = d.prepare("PRAGMA table_info(generations)").all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "provider_request_id")) {
+    d.exec("ALTER TABLE generations ADD COLUMN provider_request_id TEXT");
+  }
 }
 
 // ── one-time JSON import ────────────────────────────────────────────────────

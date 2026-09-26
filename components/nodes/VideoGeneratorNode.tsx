@@ -11,7 +11,8 @@ import { resolveInputs } from "@/lib/executor";
 import { useReadOnly } from "@/lib/readOnlyContext";
 import { ShieldBan } from "lucide-react";
 import { VIDEO_MODELS as VIDEO_MODEL_CFG } from "@/lib/modelConfig";
-import { getModelProvider, setModelProvider, type ProviderId } from "@/lib/providers";
+import { getModelProvider, type ProviderId } from "@/lib/providers";
+import { estimateVideoCost, getVideoProviders } from "@/lib/videoProviderCatalog";
 import { useGeneratingBorderAnimation } from "@/lib/useGeneratingBorderAnimation";
 import MissingInputWarning from "./MissingInputWarning";
 
@@ -388,7 +389,8 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
     window.addEventListener("aiui-higgsfield-key-changed", refresh);
     return () => window.removeEventListener("aiui-higgsfield-key-changed", refresh);
   }, []);
-  const videoProvider = videoModelId === "seedance-2" && currentProvider === "higgsfield" ? "higgsfield" : "kie";
+  const chosenProvider = (data.videoProvider as ProviderId | undefined) ?? currentProvider;
+  const videoProvider = chosenProvider === "higgsfield" && getVideoProviders(videoModelId).includes("higgsfield") ? "higgsfield" : "kie";
 
   const mode = (data.klingMode as string) ?? cfg.defaultMode ?? "";
   const resolution = (data.grokResolution as string) ?? cfg.defaultResolution ?? "";
@@ -519,12 +521,16 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
       }
     };
 
-    es.onerror = () => es.close();
+    // EventSource reconnects after a temporary network failure. The persisted
+    // task ID lets the server resume the same provider job on the next request.
 
     return () => es.close();
   }, [data.taskId, status, id, updateNodeData]);
 
   const activeHandles = new Set<string>(cfg.handles);
+  if (videoProvider === "higgsfield" && videoModelId === "kling-3.0") {
+    activeHandles.delete("resource"); activeHandles.delete("referenceVideo"); activeHandles.delete("audioRef"); activeHandles.delete("videoRef");
+  }
 
   if (isVeo) {
     if (veoMode === "frames") {
@@ -552,7 +558,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   }
 
   // Seedance / MiniMax H3: first/last frames and multimodal references are mutually exclusive scenarios
-  if (cfg.id === "seedance-2-fast" || cfg.id === "minimax-h3") {
+  if (cfg.id === "seedance-2-fast" || cfg.id === "minimax-h3" || (cfg.id === "seedance-2" && videoProvider === "higgsfield")) {
     const hasFrame = connectedHandles.has("startFrame") || connectedHandles.has("endFrame");
     const hasRef = connectedHandles.has("resource") || connectedHandles.has("referenceVideo") || connectedHandles.has("audioRef");
     if (hasFrame) {
@@ -611,6 +617,16 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   });
   const ratios = videoProvider === "higgsfield" ? cfg.ratios.filter((ratio) => ratio !== "adaptive") : cfg.ratios;
   const durations = cfg.durations;
+  const hasVideoReferences = connectedHandles.has("referenceVideo") || connectedHandles.has("videoRef");
+  const cost = estimateVideoCost({ modelId: videoModelId, provider: videoProvider, duration, resolution: resolution || "720p", aspectRatio });
+  const costUnavailable = videoProvider === "higgsfield" && hasVideoReferences;
+  const frameEstimate = videoProvider === "higgsfield" && connectedHandles.has("startFrame");
+  const incompatibleKlingInputs = videoProvider === "higgsfield" && videoModelId === "kling-3.0" &&
+    ["resource", "referenceVideo", "audioRef", "videoRef"].some((handle) => connectedHandles.has(handle));
+  const incompatibleSeedanceInputs = videoProvider === "higgsfield" && videoModelId === "seedance-2" &&
+    (connectedHandles.has("startFrame") || connectedHandles.has("endFrame")) &&
+    ["resource", "referenceVideo", "audioRef"].some((handle) => connectedHandles.has(handle));
+  const incompatibleInputs = incompatibleKlingInputs || incompatibleSeedanceInputs;
 
   const closeAll = () => {
     setModelOpen(false); setRatioOpen(false); setDurOpen(false);
@@ -834,7 +850,11 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
       return;
     }
 
-    if ((!cfg.promptOptional || videoProvider === "higgsfield") && !finalPrompt.trim()) {
+    const hasHiggsfieldMedia = Boolean(
+      upstream.startFrameUrl || upstream.endFrameUrl || upstream.videoRefUrl ||
+      orderedResources.length || upstream.referenceVideoUrls.length || upstream.referenceAudioUrls.length
+    );
+    if ((videoProvider === "higgsfield" ? !hasHiggsfieldMedia : !cfg.promptOptional) && !finalPrompt.trim()) {
       setErrorHandles(new Set(["prompt"]));
       setTimeout(() => setErrorHandles(new Set()), 1400);
       updateNodeData(id, { hasError: true });
@@ -843,14 +863,6 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
         updateNodeData(textEdge.source, { hasError: true });
         flashEdgeError(textEdge.id);
       }
-      return;
-    }
-
-    if (videoProvider === "higgsfield" && (
-      upstream.startFrameUrl || upstream.endFrameUrl || upstream.videoRefUrl ||
-      orderedResources.length || upstream.referenceVideoUrls.length || upstream.referenceAudioUrls.length
-    )) {
-      addToast("Higgsfield Seedance currently supports text-to-video only. Remove media references or choose Kie.ai.", "error");
       return;
     }
 
@@ -1849,15 +1861,15 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
                   </FloatMenu>
                 </div>
 
-                {videoModelId === "seedance-2" && (
+                {getVideoProviders(videoModelId).length > 1 && (
                   <div className="relative">
                     <Pill onClick={() => { setProviderOpen((open) => !open); setModelOpen(false); }}>
                       <span className="text-[11px] text-white/70">{videoProvider === "higgsfield" ? "Higgsfield" : "Kie.ai"}</span>
                       <ChevronIcon open={providerOpen} />
                     </Pill>
                     <FloatMenu open={providerOpen}>
-                      {(["kie", "higgsfield"] as const).map((provider) => (
-                        <FloatItem key={provider} active={videoProvider === provider} onClick={() => { setModelProvider(videoModelId, provider); setProviderOpen(false); }}>
+                      {getVideoProviders(videoModelId).map((provider) => (
+                        <FloatItem key={provider} active={videoProvider === provider} onClick={() => { updateNodeData(id, { videoProvider: provider }); setProviderOpen(false); }}>
                           {provider === "kie" ? "Kie.ai" : "Higgsfield"}
                         </FloatItem>
                       ))}
@@ -1865,6 +1877,9 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
                   </div>
                 )}
                 {videoProvider === "higgsfield" && higgsfieldConfigured === false && <span className="text-[11px] text-red-400">Not configured — add keys in Settings</span>}
+                {videoProvider === "higgsfield" && <span className="text-[10px] text-white/50" title={frameEstimate ? `${cost.note} Assumes the selected aspect ratio; actual frame dimensions may differ.` : cost.note}>
+                  {costUnavailable ? "Cost unavailable with video references" : cost.amountUsd === null ? "Cost unavailable" : `Est. $${cost.amountUsd.toFixed(2)} / video${frameEstimate ? "*" : ""}`}
+                </span>}
 
                 {/* Duration */}
                 {durations.length > 0 && (
@@ -1942,7 +1957,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
                   </div>
                 )}
 
-                {modePicker}
+                {videoProvider === "higgsfield" && videoModelId === "kling-3.0" ? <span className="text-[10px] text-white/50">Standard</span> : modePicker}
                 {resPicker}
 
                 {/* Sound toggle */}
@@ -2035,7 +2050,7 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
               )}
 
               {/* Generate button — always right */}
-              {!readOnly && <GenerateButton onClick={handleGenerateBatch} busy={animBusy} extracting={isExtractingFrames} disabled={promptOverLimit || (videoProvider === "kie" ? kieKeySet === false : higgsfieldConfigured !== true || aspectRatio === "adaptive") || busy || isExtractingFrames || hasFailedMediaInput} warningMessages={videoProvider === "higgsfield" && higgsfieldConfigured === false ? ["Higgsfield is not configured. Add keys in Settings."] : videoProvider === "higgsfield" && aspectRatio === "adaptive" ? ["Choose a fixed aspect ratio for Higgsfield."] : hasFailedMediaInput ? ["A connected image/video input has no valid content"] : undefined} />}
+              {!readOnly && <GenerateButton onClick={handleGenerateBatch} busy={animBusy} extracting={isExtractingFrames} disabled={promptOverLimit || (videoProvider === "kie" ? kieKeySet === false : higgsfieldConfigured !== true || aspectRatio === "adaptive" || incompatibleInputs) || busy || isExtractingFrames || hasFailedMediaInput} warningMessages={videoProvider === "higgsfield" && higgsfieldConfigured === false ? ["Higgsfield is not configured. Add keys in Settings."] : incompatibleKlingInputs ? ["Kling on Higgsfield supports text or start/end frames only. Remove references or choose Kie.ai."] : incompatibleSeedanceInputs ? ["Seedance on Higgsfield cannot combine frames with references. Remove one input type."] : videoProvider === "higgsfield" && aspectRatio === "adaptive" ? ["Choose a fixed aspect ratio for Higgsfield."] : hasFailedMediaInput ? ["A connected image/video input has no valid content"] : undefined} />}
             </div>
           );
         })()}

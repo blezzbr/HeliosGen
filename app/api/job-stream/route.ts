@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { jobStore, type JobResult } from "@/lib/jobStore";
 import { jobEvents } from "@/lib/jobEvents";
 import { resumeKieJob } from "@/lib/kieJobPoller";
+import { resumeHiggsfieldJob } from "@/lib/providers/higgsfield/video";
 import * as guestDb from "@/lib/guest/db";
 
 const SSE_HEADERS = {
@@ -45,14 +46,20 @@ export async function GET(req: NextRequest) {
       jobStore.set(taskId, recovered);
       return immediate(recovered);
     }
-    // No DB record either — truly not found
-    return immediate({ status: "error", error: "Job not found" });
+    if (taskId.startsWith("higgsfield-")) {
+      const gen = guestDb.recoverJob(taskId);
+      if (gen?.status === "pending") {
+        jobStore.set(taskId, { status: "pending", type: "video", requestId: gen.provider_request_id });
+        resumeHiggsfieldJob(taskId);
+      } else return immediate({ status: "error", error: "Job not found" });
+    } else return immediate({ status: "error", error: "Job not found" });
   }
 
   // Restart the kie.ai poller if a server restart lost it.
-  if (!taskId.startsWith("azure-") && !taskId.startsWith("higgsfield-")) {
-    resumeKieJob(taskId, existing.type === "video" ? "video" : "image");
-  }
+  if (taskId.startsWith("higgsfield-")) resumeHiggsfieldJob(taskId);
+  else if (!taskId.startsWith("azure-")) resumeKieJob(taskId, existing?.type === "video" ? "video" : "image");
+  const resumed = jobStore.get(taskId);
+  if (resumed && resumed.status !== "pending") return immediate(resumed);
 
   // Job is pending — open an SSE stream and wait for the poller/callback to fire
   const stream = new ReadableStream({

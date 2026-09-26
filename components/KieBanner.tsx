@@ -35,7 +35,7 @@ export default function KieBanner() {
         <line x1="12" y1="17" x2="12.01" y2="17" />
       </svg>
       <span style={{ fontSize: "12px", color: "rgba(239,68,68,0.9)", fontWeight: 500 }}>
-        No Kie.ai API key configured — generation is disabled.
+        No Kie.ai API key configured — Kie.ai models are unavailable.
       </span>
       <span style={{
         fontSize: "11px", fontWeight: 600, color: "rgba(239,68,68,0.7)",

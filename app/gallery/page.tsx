@@ -4,6 +4,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 import { IMAGE_MODELS, VIDEO_MODELS, AZURE_POPULAR_SIZES, validateAzureCustomSize } from "@/lib/modelConfig";
 import { PROVIDERS, getModelProvider, setModelProvider, modelHasProviderChoice } from "@/lib/providers";
+import { estimateVideoCost, getVideoProviders } from "@/lib/videoProviderCatalog";
 import { useWorkflowStore } from "@/lib/store";
 import { Maximize2, Minimize2, ShieldAlert, X } from "lucide-react";
 
@@ -640,6 +641,14 @@ function GalleryInner() {
   const [quality, setQuality] = useState<string>(() => loadSettings(tab, selectedFolderId)?.quality ?? "2k");
   const [isAzureProvider, setIsAzureProvider] = useState<boolean>(false);
   const [providerId, setProviderId] = useState<ReturnType<typeof getModelProvider>>("kie");
+  const [higgsfieldConfigured, setHiggsfieldConfigured] = useState<boolean | null>(null);
+  useEffect(() => {
+    const refresh = () => fetch("/api/settings/higgsfield-key").then(r => r.json())
+      .then(data => setHiggsfieldConfigured(Boolean(data.hasToken))).catch(() => setHiggsfieldConfigured(false));
+    refresh();
+    window.addEventListener("aiui-higgsfield-key-changed", refresh);
+    return () => window.removeEventListener("aiui-higgsfield-key-changed", refresh);
+  }, []);
   const [count, setCount] = useState<number>(() => loadSettings(tab, selectedFolderId)?.count ?? 1);
   const [duration, setDuration] = useState<number>(() => loadSettings(tab, selectedFolderId)?.duration ?? 5);
   const [mode, setMode] = useState<string>(() => loadSettings(tab, selectedFolderId)?.mode ?? "");
@@ -1168,7 +1177,7 @@ function GalleryInner() {
     const read = () => {
       try {
         const provider = getModelProvider(modelId);
-        setProviderId(provider);
+        setProviderId(isVideo && !getVideoProviders(modelId).includes(provider as "kie" | "higgsfield") ? "kie" : provider);
         const base     = localStorage.getItem("aiui-azure-base-url") ?? "";
         const deploy   = JSON.parse(localStorage.getItem("aiui-azure-endpoints") ?? "{}")[modelId] ?? "";
         const azure    = provider === "azure" && !!base && !!deploy && !!im?.azureQualityOptions;
@@ -1737,6 +1746,7 @@ function GalleryInner() {
           watermark: "",
         } : {
           videoModel: modelId,
+          provider: providerId === "higgsfield" && getVideoProviders(modelId).includes("higgsfield") ? "higgsfield" : "kie",
           prompt: resolvedPrompt,
           aspectRatio,
           duration,
@@ -1784,7 +1794,7 @@ function GalleryInner() {
   };
 
   const generate = async () => {
-    if (kieKeySet === false) return;
+    if (!canGenerate) return;
     if (!prompt.trim() && !isVideo) return;
     requestNotificationPermission();
     if (refImages.some(r => r.uploading)) { setGenError("Images still uploading…"); setTimeout(() => setGenError(""), 3_000); return; }
@@ -2198,7 +2208,14 @@ function GalleryInner() {
   const displayVidRefAudios = getDisplayOrder(vidRefAudios, draggingId, reorderOverId);
 
   const vidRequiresPrompt = isVideo && !!(vidModel?.apiInput.promptMaxLength);
-  const canGenerate = kieKeySet === false ? false : submitting ? false : promptOverLimit ? false : (vidRequiresPrompt || !isVideo) ? prompt.trim().length > 0 : true;
+  const keyReady = isVideo && providerId === "higgsfield" ? higgsfieldConfigured === true : kieKeySet !== false;
+  const unsupportedKlingElements = isVideo && providerId === "higgsfield" && modelId === "kling-3.0" && (vidElements.length > 0 || taggedImages.length > 0);
+  const unsupportedSeedanceMix = isVideo && providerId === "higgsfield" && modelId === "seedance-2" &&
+    (!!vidStartFrame || !!vidEndFrame) && (vidResources.length > 0 || vidRefVideos.length > 0 || vidRefAudios.length > 0 || taggedImages.length > 0);
+  const canGenerate = !keyReady || unsupportedKlingElements || unsupportedSeedanceMix ? false : submitting ? false : promptOverLimit ? false : (vidRequiresPrompt || !isVideo) ? prompt.trim().length > 0 : true;
+  const costEstimate = isVideo && providerId === "higgsfield" ? estimateVideoCost({
+    modelId, provider: "higgsfield", duration, resolution: resolution || vidModel?.defaultResolution || "720p", aspectRatio,
+  }) : null;
 
   const handleAddReference = useCallback((url: string) => {
     if (refImages.some(r => r.cdnUrl === url || r.objectUrl === url)) {
@@ -4054,7 +4071,7 @@ function GalleryInner() {
                     value={providerId}
                     onChange={(v) => setModelProvider(modelId, v as (typeof PROVIDERS)[number]["id"])}
                     disabled={submitting}
-                    options={PROVIDERS.map(p => ({ value: p.id, label: p.label, providerIcon: <ProviderBackendIcon id={p.id} /> }))}
+                    options={PROVIDERS.filter(p => !isVideo || getVideoProviders(modelId).includes(p.id as "kie" | "higgsfield")).map(p => ({ value: p.id, label: p.label, providerIcon: <ProviderBackendIcon id={p.id} /> }))}
                     showChevron
                   />
                 )}
@@ -4153,7 +4170,7 @@ function GalleryInner() {
                 )}
 
                 {/* Mode (video) */}
-                {isVideo && vidModes.length > 0 && (
+                {isVideo && vidModes.length > 0 && !(providerId === "higgsfield" && modelId === "kling-3.0") && (
                   <CustomDropdown
                     value={mode}
                     onChange={setMode}
@@ -4161,6 +4178,7 @@ function GalleryInner() {
                     options={vidModes.map(m => ({ value: m.value, label: m.label }))}
                   />
                 )}
+                {isVideo && providerId === "higgsfield" && modelId === "kling-3.0" && <span style={{ fontSize: "11px", color: "rgba(255,255,255,0.55)" }}>Standard</span>}
 
                 {/* Resolution (video) */}
                 {isVideo && (vidModel?.resolutions?.length ?? 0) > 0 && (
@@ -4414,6 +4432,9 @@ function GalleryInner() {
 
               {/* Character count + Generate button */}
               <div style={{ display: "flex", alignItems: "center", gap: "12px", flexShrink: 0 }}>
+                {isVideo && providerId === "higgsfield" && <span title={vidStartFrame ? `${costEstimate?.note} Assumes the selected aspect ratio; actual frame dimensions may differ.` : costEstimate?.note} style={{ fontSize: "11px", color: "rgba(255,255,255,0.55)" }}>
+                  {higgsfieldConfigured === false ? "Higgsfield not configured" : unsupportedKlingElements ? "Remove ELEM inputs for Higgsfield" : unsupportedSeedanceMix ? "Choose frames or references" : vidRefVideos.length > 0 ? "Cost unavailable with video references" : costEstimate?.amountUsd == null ? "Cost unavailable" : `Est. $${costEstimate.amountUsd.toFixed(2)} / video${vidStartFrame ? "*" : ""}`}
+                </span>}
                 {promptMaxLength !== null && !multiPromptMode && (
                   <div
                     aria-hidden

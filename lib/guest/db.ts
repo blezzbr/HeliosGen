@@ -25,6 +25,7 @@ interface Generation {
   image_urls?: string[];
   video_url?: string;
   error_msg?: string;
+  provider_request_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -81,6 +82,7 @@ function rowToGeneration(r: GenRow): Generation {
     image_urls: parseArr(r.image_urls),
     video_url: (r.video_url as string) ?? undefined,
     error_msg: (r.error_msg as string) ?? undefined,
+    provider_request_id: (r.provider_request_id as string) ?? undefined,
     created_at: r.created_at as string,
     updated_at: r.updated_at as string,
   };
@@ -99,8 +101,8 @@ export function insertGeneration(data: Omit<Generation, "id" | "created_at" | "u
       INSERT INTO generations
         (id, user_id, task_id, generation_type, status, prompt, model, aspect_ratio,
          quality, azure_resolution, duration, kling_mode, sound, reference_image_urls,
-         image_url, image_urls, video_url, error_msg, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         image_url, image_urls, video_url, error_msg, provider_request_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(task_id) DO NOTHING
     `)
     .run(
@@ -110,7 +112,7 @@ export function insertGeneration(data: Omit<Generation, "id" | "created_at" | "u
       data.sound ? 1 : 0,
       data.reference_image_urls ? JSON.stringify(data.reference_image_urls) : null,
       data.image_url ?? null, data.image_urls ? JSON.stringify(data.image_urls) : null,
-      data.video_url ?? null, data.error_msg ?? null, ts, ts,
+      data.video_url ?? null, data.error_msg ?? null, data.provider_request_id ?? null, ts, ts,
     );
 }
 
@@ -131,7 +133,7 @@ export function updateGeneration(
 
 export function recoverJob(
   taskId: string,
-): Pick<Generation, "status" | "video_url" | "image_url" | "image_urls" | "error_msg"> | null {
+): Pick<Generation, "status" | "video_url" | "image_url" | "image_urls" | "error_msg" | "provider_request_id"> | null {
   const r = db().prepare("SELECT * FROM generations WHERE task_id = ?").get(taskId) as GenRow | undefined;
   return r ? rowToGeneration(r) : null;
 }

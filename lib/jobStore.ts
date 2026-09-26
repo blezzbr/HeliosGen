@@ -3,7 +3,7 @@ import { join } from "path";
 import { DATA_DIR } from "./guest/paths";
 
 export type JobResult =
-  | { status: "pending"; type?: "image" | "video"; userId?: string }
+  | { status: "pending"; type?: "image" | "video"; userId?: string; requestId?: string }
   | { status: "done"; imageUrl?: string; imageUrls?: string[]; videoUrl?: string }
   | { status: "error"; error: string };
 

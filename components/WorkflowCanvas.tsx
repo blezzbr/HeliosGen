@@ -20,6 +20,8 @@ import "@xyflow/react/dist/style.css";
 import { useWorkflowStore, NodeData } from "@/lib/store";
 import { requestWorkflowSync } from "@/lib/workflowSyncBus";
 import { VIDEO_MODELS } from "@/lib/modelConfig";
+import { getModelProvider } from "@/lib/providers";
+import { getVideoProviders } from "@/lib/videoProviderCatalog";
 import CuttableEdge from "@/components/edges/CuttableEdge";
 import { topoSort, resolveInputs } from "@/lib/executor";
 import { NODE_SIZE, FALLBACK_SIZE, getLastNodeSettings, getDefaultNodeSize } from "@/lib/nodeTypes";
@@ -1330,19 +1332,26 @@ export default function WorkflowCanvas() {
         }
       }
 
-      // ── Video generator (Kling 3.0) ─────────────────────────────────────────
+      // ── Video generator ─────────────────────────────────────────────────────
       if (node.type === "videoGeneratorNode") {
         const upstream = resolveInputs(nodeId, useWorkflowStore.getState().nodes as Node<NodeData>[], edges);
         const prompt = upstream.prompt ?? "";
+        const videoModel = (node.data.videoModel as string | undefined) ?? "kling-3.0";
+        const selectedProvider = (node.data.videoProvider as string | undefined) ?? getModelProvider(videoModel);
+        const provider = selectedProvider === "higgsfield" && getVideoProviders(videoModel).includes("higgsfield") ? "higgsfield" : "kie";
         const duration = node.data.duration ?? 5;
         const aspectRatio = node.data.aspectRatio ?? "16:9";
         const klingMode = node.data.klingMode ?? "pro";
         const sound = node.data.sound ?? false;
         const payload = {
+          videoModel, provider,
           prompt,
           startFrameUrl: upstream.startFrameUrl,
           endFrameUrl: upstream.endFrameUrl,
           resources: upstream.resources,
+          referenceVideoUrls: upstream.referenceVideoUrls,
+          referenceAudioUrls: upstream.referenceAudioUrls,
+          resolution: node.data.grokResolution ?? VIDEO_MODELS.find(model => model.id === videoModel)?.defaultResolution,
           sound, duration, aspectRatio,
           mode: klingMode,
         };
@@ -1362,7 +1371,7 @@ export default function WorkflowCanvas() {
           continue;
         }
 
-        push(`[${node.id}] Kling 3.0 · ${klingMode} · ${duration}s…`);
+        push(`[${node.id}] ${videoModel} · ${provider} · ${duration}s…`);
         updateNodeData(nodeId, { status: "running", videoUrl: undefined });
 
         try {
@@ -1372,8 +1381,17 @@ export default function WorkflowCanvas() {
             body: JSON.stringify(payload),
           });
           const data = await res.json();
-          if (!res.ok) throw new Error(data.error);
-          updateNodeData(nodeId, { status: "done", videoUrl: data.videoUrl });
+          if (!res.ok || !data.taskId) throw new Error(data.error ?? "Video submission failed");
+          let videoUrl: string | undefined;
+          for (let attempt = 0; attempt < 220; attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            const jobResponse = await fetch(`/api/job-status?taskId=${encodeURIComponent(data.taskId)}`);
+            const job = await jobResponse.json();
+            if (job.status === "done") { videoUrl = job.videoUrl; break; }
+            if (job.status === "error") throw new Error(job.error ?? "Video generation failed");
+          }
+          if (!videoUrl) throw new Error("Timed out waiting for video generation. Check job history before submitting again.");
+          updateNodeData(nodeId, { status: "done", videoUrl });
           push(`[${node.id}] done`);
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e);
