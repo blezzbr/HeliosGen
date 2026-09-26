@@ -7,7 +7,7 @@ import { VIDEO_MODELS } from "@/lib/modelConfig";
 import { getKieTokenForUser } from "@/lib/getKieToken";
 import { GUEST_USER_ID } from "@/lib/guestMode";
 import * as guestDb from "@/lib/guest/db";
-import { startSeedanceVideo } from "@/lib/providers/higgsfield/video";
+import { startHiggsfieldVideo } from "@/lib/providers/higgsfield/video";
 
 const KIE_BASE = "https://api.kie.ai";
 
@@ -52,12 +52,9 @@ export async function POST(req: NextRequest) {
   const userId = GUEST_USER_ID;
 
   if (body.provider === "higgsfield") {
-    if (videoModel !== "seedance-2") {
-      return NextResponse.json({ error: "Higgsfield currently supports only Seedance 2.0 text-to-video." }, { status: 400 });
-    }
     if (debugOnly) return NextResponse.json({ taskId: "higgsfield-debug" });
     try {
-      return NextResponse.json({ taskId: startSeedanceVideo(body) });
+      return NextResponse.json({ taskId: startHiggsfieldVideo(body) });
     } catch (error) {
       return NextResponse.json({ error: error instanceof Error ? error.message : "Higgsfield generation failed." }, { status: 400 });
     }

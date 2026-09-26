@@ -3,6 +3,7 @@
 // (Kie.ai / Higgsfield / Azure Foundry / Codex CLI), shared by Settings and nodes.
 // ─────────────────────────────────────────────────────────────────────────────
 import { IMAGE_MODELS } from "@/lib/modelConfig";
+import { getVideoProviders } from "@/lib/videoProviderCatalog";
 
 export const PROVIDERS = [
   { id: "kie",   label: "Kie.ai" },
@@ -42,13 +43,12 @@ export function setModelProvider(modelId: string, provider: ProviderId) {
 }
 
 /**
- * Models with more than one backend to choose from. Azure/Codex are image-only;
- * Higgsfield is supported only for Seedance 2.0 text-to-video.
+ * Models with more than one backend to choose from.
  */
 const MULTI_PROVIDER_MODEL_IDS = new Set(
-  [...IMAGE_MODELS.filter((m) => !!m.azureSizeMap).map((m) => m.id), "seedance-2"],
+  IMAGE_MODELS.filter((m) => !!m.azureSizeMap).map((m) => m.id),
 );
 
 export function modelHasProviderChoice(modelId: string): boolean {
-  return MULTI_PROVIDER_MODEL_IDS.has(modelId);
+  return MULTI_PROVIDER_MODEL_IDS.has(modelId) || getVideoProviders(modelId).length > 1;
 }

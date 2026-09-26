@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jobStore } from "@/lib/jobStore";
 import { resumeKieJob } from "@/lib/kieJobPoller";
+import { resumeHiggsfieldJob } from "@/lib/providers/higgsfield/video";
 import * as guestDb from "@/lib/guest/db";
 
 function recoverJob(taskId: string): "done" | "error" | "pending" | "not_found" {
@@ -32,8 +33,9 @@ export async function GET(req: NextRequest) {
   if (result) {
     // If a restart killed the background poller for a job that's still pending,
     // restart it so the result can still land.
-    if (result.status === "pending" && !taskId.startsWith("azure-") && !taskId.startsWith("higgsfield-")) {
-      resumeKieJob(taskId, result.type === "video" ? "video" : "image");
+    if (result.status === "pending") {
+      if (taskId.startsWith("higgsfield-")) resumeHiggsfieldJob(taskId);
+      else if (!taskId.startsWith("azure-")) resumeKieJob(taskId, result.type === "video" ? "video" : "image");
     }
     return NextResponse.json(result);
   }
