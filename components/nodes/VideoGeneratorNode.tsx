@@ -521,7 +521,8 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
       }
     };
 
-    es.onerror = () => es.close();
+    // EventSource reconnects after a temporary network failure. The persisted
+    // task ID lets the server resume the same provider job on the next request.
 
     return () => es.close();
   }, [data.taskId, status, id, updateNodeData]);
@@ -618,7 +619,8 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
   const durations = cfg.durations;
   const hasVideoReferences = connectedHandles.has("referenceVideo") || connectedHandles.has("videoRef");
   const cost = estimateVideoCost({ modelId: videoModelId, provider: videoProvider, duration, resolution: resolution || "720p", aspectRatio });
-  const costUnavailable = videoProvider === "higgsfield" && (hasVideoReferences || connectedHandles.has("startFrame"));
+  const costUnavailable = videoProvider === "higgsfield" && hasVideoReferences;
+  const frameEstimate = videoProvider === "higgsfield" && connectedHandles.has("startFrame");
   const incompatibleKlingInputs = videoProvider === "higgsfield" && videoModelId === "kling-3.0" &&
     ["resource", "referenceVideo", "audioRef", "videoRef"].some((handle) => connectedHandles.has(handle));
   const incompatibleSeedanceInputs = videoProvider === "higgsfield" && videoModelId === "seedance-2" &&
@@ -848,7 +850,11 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
       return;
     }
 
-    if ((!cfg.promptOptional || videoProvider === "higgsfield") && !finalPrompt.trim()) {
+    const hasHiggsfieldMedia = Boolean(
+      upstream.startFrameUrl || upstream.endFrameUrl || upstream.videoRefUrl ||
+      orderedResources.length || upstream.referenceVideoUrls.length || upstream.referenceAudioUrls.length
+    );
+    if ((videoProvider === "higgsfield" ? !hasHiggsfieldMedia : !cfg.promptOptional) && !finalPrompt.trim()) {
       setErrorHandles(new Set(["prompt"]));
       setTimeout(() => setErrorHandles(new Set()), 1400);
       updateNodeData(id, { hasError: true });
@@ -857,14 +863,6 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
         updateNodeData(textEdge.source, { hasError: true });
         flashEdgeError(textEdge.id);
       }
-      return;
-    }
-
-    if (videoProvider === "higgsfield" && (
-      upstream.startFrameUrl || upstream.endFrameUrl || upstream.videoRefUrl ||
-      orderedResources.length || upstream.referenceVideoUrls.length || upstream.referenceAudioUrls.length
-    )) {
-      addToast("Higgsfield Seedance currently supports text-to-video only. Remove media references or choose Kie.ai.", "error");
       return;
     }
 
@@ -1879,8 +1877,8 @@ export default function VideoGeneratorNode({ id, data, selected }: NodeProps<Vid
                   </div>
                 )}
                 {videoProvider === "higgsfield" && higgsfieldConfigured === false && <span className="text-[11px] text-red-400">Not configured — add keys in Settings</span>}
-                {videoProvider === "higgsfield" && <span className="text-[10px] text-white/50" title={cost.note}>
-                  {costUnavailable ? "Cost unavailable for frame/video inputs" : cost.amountUsd === null ? "Cost unavailable" : `Est. $${cost.amountUsd.toFixed(2)} / video`}
+                {videoProvider === "higgsfield" && <span className="text-[10px] text-white/50" title={frameEstimate ? `${cost.note} Assumes the selected aspect ratio; actual frame dimensions may differ.` : cost.note}>
+                  {costUnavailable ? "Cost unavailable with video references" : cost.amountUsd === null ? "Cost unavailable" : `Est. $${cost.amountUsd.toFixed(2)} / video${frameEstimate ? "*" : ""}`}
                 </span>}
 
                 {/* Duration */}

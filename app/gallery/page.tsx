@@ -1794,7 +1794,7 @@ function GalleryInner() {
   };
 
   const generate = async () => {
-    if (kieKeySet === false) return;
+    if (!canGenerate) return;
     if (!prompt.trim() && !isVideo) return;
     requestNotificationPermission();
     if (refImages.some(r => r.uploading)) { setGenError("Images still uploading…"); setTimeout(() => setGenError(""), 3_000); return; }
@@ -4432,8 +4432,8 @@ function GalleryInner() {
 
               {/* Character count + Generate button */}
               <div style={{ display: "flex", alignItems: "center", gap: "12px", flexShrink: 0 }}>
-                {isVideo && providerId === "higgsfield" && <span title={costEstimate?.note} style={{ fontSize: "11px", color: "rgba(255,255,255,0.55)" }}>
-                  {higgsfieldConfigured === false ? "Higgsfield not configured" : unsupportedKlingElements ? "Remove ELEM inputs for Higgsfield" : unsupportedSeedanceMix ? "Choose frames or references" : vidStartFrame || vidRefVideos.length > 0 ? "Cost unavailable for frame/video inputs" : costEstimate?.amountUsd == null ? "Cost unavailable" : `Est. $${costEstimate.amountUsd.toFixed(2)} / video`}
+                {isVideo && providerId === "higgsfield" && <span title={vidStartFrame ? `${costEstimate?.note} Assumes the selected aspect ratio; actual frame dimensions may differ.` : costEstimate?.note} style={{ fontSize: "11px", color: "rgba(255,255,255,0.55)" }}>
+                  {higgsfieldConfigured === false ? "Higgsfield not configured" : unsupportedKlingElements ? "Remove ELEM inputs for Higgsfield" : unsupportedSeedanceMix ? "Choose frames or references" : vidRefVideos.length > 0 ? "Cost unavailable with video references" : costEstimate?.amountUsd == null ? "Cost unavailable" : `Est. $${costEstimate.amountUsd.toFixed(2)} / video${vidStartFrame ? "*" : ""}`}
                 </span>}
                 {promptMaxLength !== null && !multiPromptMode && (
                   <div

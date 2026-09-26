@@ -21,7 +21,7 @@ Frames and multimodal references are mutually exclusive for Seedance on Higgsfie
 
 ## Cost estimate
 
-For Higgsfield Seedance 2.0 text and image/audio references, the UI calculates USD from the [published video-token formula](https://open.higgsfield.ai/models/bytedance/seedance-2.0/text-to-video/playground), selected duration, resolution and aspect ratio. It is an estimate before discounts; final billing can differ. If the provider does not publish enough information for the selected variant, the UI displays `Cost unavailable` instead of inventing a price. Frame input determines the output ratio, and video references add billable input duration; both show unavailable until media metadata is available. Kie and Higgsfield Kling currently show unavailable.
+For Higgsfield Seedance 2.0, the UI calculates USD from the [published video-token formula](https://open.higgsfield.ai/models/bytedance/seedance-2.0/text-to-video/playground), selected duration, resolution and aspect ratio. It is an estimate before discounts; final billing can differ. With frame input, `*` notes that the estimate assumes the selected ratio, while the actual output can follow the frame. Video references add billable input duration and show unavailable until media metadata is available. Kie and Higgsfield Kling currently show unavailable.
 
 ## Configure and run
 

@@ -4,6 +4,7 @@ import { IMAGE_MODELS, VIDEO_MODELS } from "@/lib/modelConfig";
 import { MODEL_GROUPS } from "@/lib/models";
 import { useWorkflowStore } from "@/lib/store";
 import { PROVIDERS, ProviderId, loadModelProviders, saveModelProviders, getModelProvider } from "@/lib/providers";
+import { getVideoProviders } from "@/lib/videoProviderCatalog";
 
 /* ─── Provider options (re-exported for backwards compat) ───────────────────── */
 
@@ -1083,7 +1084,7 @@ function VideoModelsPanel({
     provider: m.provider,
     category: "Video",
     hasAzureDeployment: false,
-    providerOptions: m.id === "seedance-2" ? (["kie", "higgsfield"] as ProviderId[]) : undefined,
+    providerOptions: getVideoProviders(m.id).length > 1 ? getVideoProviders(m.id) : undefined,
   }));
 
   return (
