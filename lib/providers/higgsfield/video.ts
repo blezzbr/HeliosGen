@@ -11,29 +11,8 @@ import { getVideoProviderVariant, type VideoInputMode } from "@/lib/videoProvide
 import { prepareHiggsfieldMedia } from "./upload";
 import { getHiggsfieldCredentials } from "@/lib/guest/db";
 
-export const SEEDANCE_TEXT_TO_VIDEO = "bytedance/seedance-2.0/text-to-video";
 const RATIOS = new Set(["16:9", "4:3", "1:1", "3:4", "9:16", "21:9"]);
 const RESOLUTIONS = new Set(["480p", "720p", "1080p", "4k"]);
-
-export interface SeedanceInput {
-  prompt: string;
-  duration: number;
-  resolution: string;
-  aspect_ratio: string;
-  generate_audio: boolean;
-}
-
-export function makeSeedanceInput(body: Record<string, unknown>): SeedanceInput {
-  const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-  const duration = Number(body.duration ?? 5);
-  const resolution = body.resolution ?? "720p";
-  const aspectRatio = body.aspectRatio ?? body.aspect_ratio ?? "16:9";
-  if (!prompt) throw new Error("Seedance 2.0 requires a prompt for Higgsfield.");
-  if (!Number.isInteger(duration) || duration < 4 || duration > 15) throw new Error("Duration must be 4–15 seconds.");
-  if (typeof resolution !== "string" || !RESOLUTIONS.has(resolution)) throw new Error("Unsupported Higgsfield resolution.");
-  if (typeof aspectRatio !== "string" || !RATIOS.has(aspectRatio)) throw new Error("Unsupported Higgsfield aspect ratio.");
-  return { prompt, duration, resolution, aspect_ratio: aspectRatio, generate_audio: Boolean(body.sound ?? body.generate_audio ?? false) };
-}
 
 type MediaResource = { url?: string };
 function mediaList(value: unknown): string[] {
@@ -204,5 +183,3 @@ export function startHiggsfieldVideo(body: Record<string, unknown>): string {
   })();
   return taskId;
 }
-
-export const startSeedanceVideo = startHiggsfieldVideo;
