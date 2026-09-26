@@ -7,9 +7,27 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const mockState = { submits: [], polls: new Map() };
+const mockState = { submits: [], polls: new Map(), kieSubmits: [], kiePolls: 0 };
 const mock = createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
+  if (req.method === "POST" && url.pathname === "/api/v1/jobs/createTask") {
+    assert.equal(req.headers.authorization, "Bearer kie-test-key");
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    mockState.kieSubmits.push(JSON.parse(body));
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ code: 200, data: { taskId: "kie-test-1" } }));
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/v1/jobs/recordInfo") {
+    assert.equal(req.headers.authorization, "Bearer kie-test-key");
+    assert.equal(url.searchParams.get("taskId"), "kie-test-1");
+    mockState.kiePolls++;
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ code: 200, data: mockState.kiePolls === 1 ? { state: "waiting" } :
+      { state: "success", resultJson: JSON.stringify({ resultUrls: [`http://127.0.0.1:${mock.address().port}/video.mp4`] }) } }));
+    return;
+  }
   if (req.method === "POST" && url.pathname === "/files/generate-upload-url") {
     assert.equal(req.headers.authorization, "Key test-id:test-secret");
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -94,7 +112,7 @@ test("Higgsfield credentials, payload, polling, errors and Kie selection", async
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
   const launch = () => spawn(process.execPath, ["node_modules/next/dist/bin/next", "dev", "-p", String(port)], {
-    cwd: process.cwd(), env: { ...process.env, HELIOS_DATA_DIR: dataDir, HF_API_BASE_URL: `http://127.0.0.1:${mock.address().port}`, NEXT_TELEMETRY_DISABLED: "1" },
+    cwd: process.cwd(), env: { ...process.env, HELIOS_DATA_DIR: dataDir, HF_API_BASE_URL: `http://127.0.0.1:${mock.address().port}`, KIE_API_BASE_URL: `http://127.0.0.1:${mock.address().port}`, NEXT_TELEMETRY_DISABLED: "1" },
     stdio: "ignore",
   });
   let child = launch();
@@ -175,6 +193,7 @@ test("Higgsfield credentials, payload, polling, errors and Kie selection", async
     assert.ok(requestSaved, "Higgsfield request ID should be persisted before polling");
     child.kill("SIGTERM");
     await new Promise(resolve => child.once("exit", resolve));
+    await rm(join(dataDir, ".job-store.json"), { force: true }); // Force SQLite recovery on restart.
     child = launch();
     await waitFor(`${base}/api/settings/higgsfield-key`);
     assert.equal((await waitForJob(base, resumeTaskId)).status, "done");
@@ -182,12 +201,24 @@ test("Higgsfield credentials, payload, polling, errors and Kie selection", async
     const failed = await generate("fail");
     assert.equal((await waitForJob(base, (await failed.json()).taskId)).status, "error");
     const rate = await generate("rate limit");
-    assert.match((await waitForJob(base, (await rate.json()).taskId)).error, /rate limit/i);
+    assert.equal(rate.status, 400);
+    assert.match((await rate.json()).error, /rate limit/i);
     assert.equal(mockState.submits.filter((item) => item.prompt === "rate limit").length, 1);
 
     const kie = await generate("success", "kie");
     assert.equal(kie.status, 401); // No Kie key in this isolated test data directory.
     assert.match((await kie.json()).error, /Kie.ai/);
+    const saveKie = await fetch(`${base}/api/settings/kie-key`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kieApiToken: "kie-test-key" }),
+    });
+    assert.equal(saveKie.status, 200);
+    const kieStarted = await generate("kie positive", "kie");
+    assert.equal(kieStarted.status, 200);
+    assert.equal((await waitForJob(base, (await kieStarted.json()).taskId)).status, "done");
+    assert.equal(mockState.kieSubmits[0].model, "bytedance/seedance-2");
+    assert.equal(mockState.kieSubmits[0].input.prompt, "kie positive");
+    assert.ok(mockState.kiePolls >= 2);
 
     await fetch(`${base}/api/settings/higgsfield-key`, { method: "DELETE" });
     assert.deepEqual(await status(), { hasToken: false });

@@ -16,7 +16,7 @@ import { jobEvents } from "./jobEvents";
 import { mirrorToR2 } from "./storage";
 import * as guestDb from "./guest/db";
 
-const BASE = "https://api.kie.ai";
+const BASE = process.env.KIE_API_BASE_URL ?? "https://api.kie.ai";
 const POLL_INTERVAL_MS = 3_000;
 const MAX_POLL_MS = 12 * 60 * 1000; // matches the SSE hard cap in job-status
 

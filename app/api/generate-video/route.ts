@@ -9,7 +9,7 @@ import { GUEST_USER_ID } from "@/lib/guestMode";
 import * as guestDb from "@/lib/guest/db";
 import { startHiggsfieldVideo } from "@/lib/providers/higgsfield/video";
 
-const KIE_BASE = "https://api.kie.ai";
+const KIE_BASE = process.env.KIE_API_BASE_URL ?? "https://api.kie.ai";
 
 interface Resource {
   url: string;
@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
   if (body.provider === "higgsfield") {
     if (debugOnly) return NextResponse.json({ taskId: "higgsfield-debug" });
     try {
-      return NextResponse.json({ taskId: startHiggsfieldVideo(body) });
+      return NextResponse.json({ taskId: await startHiggsfieldVideo(body) });
     } catch (error) {
       return NextResponse.json({ error: error instanceof Error ? error.message : "Higgsfield generation failed." }, { status: 400 });
     }

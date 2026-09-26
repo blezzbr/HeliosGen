@@ -53,6 +53,12 @@ export async function GET(req: NextRequest) {
   }
 
   if (recovered === "pending") {
+    if (taskId.startsWith("higgsfield-")) {
+      const requestId = guestDb.recoverJob(taskId)?.provider_request_id;
+      jobStore.set(taskId, { status: "pending", type: "video", requestId });
+      resumeHiggsfieldJob(taskId);
+      return NextResponse.json(jobStore.get(taskId));
+    }
     return NextResponse.json({ status: "pending" });
   }
 

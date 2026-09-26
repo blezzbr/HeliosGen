@@ -91,8 +91,13 @@ const activePollers = new Set<string>();
 
 export function resumeHiggsfieldJob(taskId: string): void {
   const pending = jobStore.get(taskId);
-  if (pending?.status !== "pending" || !pending.requestId || activePollers.has(taskId)) return;
-  const requestId = pending.requestId;
+  if (pending?.status !== "pending" || activePollers.has(taskId)) return;
+  const requestId = pending.requestId ?? guestDb.recoverJob(taskId)?.provider_request_id;
+  if (!requestId) {
+    settle(taskId, { status: "error", error: "Cannot resume Higgsfield job without a request ID. Check your account before submitting again." });
+    return;
+  }
+  if (!pending.requestId) jobStore.set(taskId, { ...pending, requestId });
   activePollers.add(taskId);
   void (async () => {
     try {
@@ -145,41 +150,35 @@ export function resumeHiggsfieldJob(taskId: string): void {
   })();
 }
 
-export function startHiggsfieldVideo(body: Record<string, unknown>): string {
+export async function startHiggsfieldVideo(body: Record<string, unknown>): Promise<string> {
   const client = getHiggsfieldClient();
   if (!client) throw new Error("Higgsfield is not configured. Add API Key ID and Secret in Settings → API Keys.");
   const { modelId, endpoint, input } = makeHiggsfieldVideoRequest(body);
+  const prepared: Record<string, unknown> = { ...input };
+  for (const key of ["image_url", "end_image_url", "last_image_url"]) {
+    if (typeof prepared[key] === "string") prepared[key] = await prepareHiggsfieldMedia(prepared[key]);
+  }
+  for (const key of ["image_urls", "video_urls", "audio_urls"]) {
+    if (Array.isArray(prepared[key])) prepared[key] = await Promise.all((prepared[key] as string[]).map(prepareHiggsfieldMedia));
+  }
+  let response;
+  try {
+    response = await client.subscribe(endpoint, { input: prepared, withPolling: false });
+  } catch (error) {
+    if (error instanceof APIError && error.statusCode === 429) throw new Error("Higgsfield rate limit reached. Try again later.");
+    if (error instanceof TimeoutError) throw new Error("Higgsfield submission timed out. Check your account before submitting again.");
+    if (error instanceof AuthenticationError) throw new Error("Higgsfield credentials are invalid. Check Settings → API Keys.");
+    throw error;
+  }
+  if (!response.request_id) throw new Error("Higgsfield did not return a request ID. Check your account before submitting again.");
   const taskId = `higgsfield-${randomUUID()}`;
-  jobStore.set(taskId, { status: "pending", type: "video", userId: GUEST_USER_ID });
   guestDb.insertGeneration({
     task_id: taskId, user_id: GUEST_USER_ID, generation_type: "video", status: "pending",
     model: modelId, prompt: String(input.prompt ?? ""), aspect_ratio: String(input.aspect_ratio ?? ""),
     duration: Number(input.duration), sound: Boolean(input.generate_audio ?? input.sound === "on"), reference_image_urls: [],
+    provider_request_id: response.request_id,
   });
-
-  void (async () => {
-    try {
-      const prepared: Record<string, unknown> = { ...input };
-      for (const key of ["image_url", "end_image_url", "last_image_url"]) {
-        if (typeof prepared[key] === "string") prepared[key] = await prepareHiggsfieldMedia(prepared[key]);
-      }
-      for (const key of ["image_urls", "video_urls", "audio_urls"]) {
-        if (Array.isArray(prepared[key])) prepared[key] = await Promise.all((prepared[key] as string[]).map(prepareHiggsfieldMedia));
-      }
-      const response = await client.subscribe(endpoint, { input: prepared, withPolling: false });
-      if (!response.request_id) throw new Error("Higgsfield did not return a request ID. Check your account before submitting again.");
-      jobStore.set(taskId, { status: "pending", type: "video", userId: GUEST_USER_ID, requestId: response.request_id });
-      resumeHiggsfieldJob(taskId);
-    } catch (error) {
-      const message = error instanceof APIError && error.statusCode === 429
-        ? "Higgsfield rate limit reached. Try again later."
-        : error instanceof TimeoutError
-        ? "Higgsfield generation timed out. Check your account before submitting again."
-        : error instanceof AuthenticationError
-        ? "Higgsfield credentials are invalid. Check Settings → API Keys."
-        : error instanceof Error ? error.message : "Higgsfield generation failed.";
-      settle(taskId, { status: "error", error: message });
-    }
-  })();
+  jobStore.set(taskId, { status: "pending", type: "video", userId: GUEST_USER_ID, requestId: response.request_id });
+  resumeHiggsfieldJob(taskId);
   return taskId;
 }
